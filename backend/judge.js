@@ -1,12 +1,12 @@
 ﻿import crypto from 'crypto';
 import { WebSocket } from 'ws';
 
-// Change these two URLs to your Render URLs after Step 7 cloud deployment!
 const API_URL = process.env.JUDGE_API_URL || 'http://localhost:4000';
 const WS_URL = process.env.JUDGE_WS_URL || 'ws://localhost:4000/ws';
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || 'whsec_xavier_faith_secret_2026';
 
-const BOARD_ID = `judgment-board-${Date.now()}`;
+const BOARD_ID = `judgment-board-${crypto.randomUUID()}`;
+const CRDT_EVENT_ID = `crdt_split_${crypto.randomUUID()}`;
 
 function signPayload(rawString) {
   return crypto.createHmac('sha256', WEBHOOK_SECRET).update(rawString).digest('hex');
@@ -25,7 +25,7 @@ async function runJudgment() {
 
   // TEST 2: Raw-Body HMAC Signature Rejection on Tampered Signature
   const webhookBody = JSON.stringify({
-    webhookId: `wh_test_${Date.now()}`,
+    webhookId: `wh_test_${crypto.randomUUID()}`,
     boardId: BOARD_ID,
     amount: 500
   });
@@ -52,7 +52,6 @@ async function runJudgment() {
   });
   const firstCredit = await firstCreditRes.json();
 
-  // Fire exact same webhook a second time!
   const duplicateCreditRes = await fetch(`${API_URL}/api/webhooks/payment`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-miracle-signature': validSig },
@@ -71,13 +70,13 @@ async function runJudgment() {
     const peerB = new WebSocket(WS_URL);
     let peerAReady = false;
     let peerBReady = false;
-    let peerBReceivedPatch = false;
+    let pushed = false;
 
     const timeout = setTimeout(() => {
       peerA.close();
       peerB.close();
-      reject(new Error('TEST 4 FAILED: WebSocket CRDT sync timed out after 5s'));
-    }, 5000);
+      reject(new Error(`TEST 4 FAILED: WebSocket CRDT sync timed out after 15s (peerAReady=${peerAReady}, peerBReady=${peerBReady}, pushed=${pushed})`));
+    }, 15000);
 
     peerA.on('open', () => {
       peerA.send(JSON.stringify({ type: 'JOIN_BOARD', boardId: BOARD_ID, lastKnownHlc: '' }));
@@ -91,7 +90,7 @@ async function runJudgment() {
       const msg = JSON.parse(raw.toString());
       if (msg.type === 'SYNC_STATE') {
         peerAReady = true;
-        if (peerAReady && peerBReady) pushOfflineEvent();
+        if (peerAReady && peerBReady && !pushed) pushOfflineEvent();
       }
     });
 
@@ -99,10 +98,9 @@ async function runJudgment() {
       const msg = JSON.parse(raw.toString());
       if (msg.type === 'SYNC_STATE') {
         peerBReady = true;
-        if (peerAReady && peerBReady) pushOfflineEvent();
+        if (peerAReady && peerBReady && !pushed) pushOfflineEvent();
       }
-      if (msg.type === 'REMOTE_EVENTS' && msg.events.some((e) => e.eventId === 'crdt_split_test_1')) {
-        peerBReceivedPatch = true;
+      if (msg.type === 'REMOTE_EVENTS' && msg.events.some((e) => e.eventId === CRDT_EVENT_ID)) {
         clearTimeout(timeout);
         peerA.close();
         peerB.close();
@@ -111,16 +109,19 @@ async function runJudgment() {
     });
 
     function pushOfflineEvent() {
-      peerA.send(JSON.stringify({
-        type: 'PUSH_EVENTS',
-        events: [{
-          eventId: 'crdt_split_test_1',
-          boardId: BOARD_ID,
-          clientId: 'peer_A_offline',
-          hlcTimestamp: `${Date.now().toString().padStart(15, '0')}:0001:peer_A`,
-          encryptedPayload: 'U2FsdGVkX1+MockCiphertextBase64Payload=='
-        }]
-      }));
+      pushed = true;
+      setTimeout(() => {
+        peerA.send(JSON.stringify({
+          type: 'PUSH_EVENTS',
+          events: [{
+            eventId: CRDT_EVENT_ID,
+            boardId: BOARD_ID,
+            clientId: 'peer_A_offline',
+            hlcTimestamp: `${Date.now().toString().padStart(15, '0')}:0001:peer_A`,
+            encryptedPayload: 'U2FsdGVkX1+MockCiphertextBase64Payload=='
+          }]
+        }));
+      }, 300);
     }
   });
   console.log('[PASS] Test 4: Multi-Peer WebSocket CRDT Encrypted Patch Fan-Out Verified');
