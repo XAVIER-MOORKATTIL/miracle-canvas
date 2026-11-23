@@ -1,3 +1,5 @@
+import dns from 'dns';
+dns.setServers(['8.8.8.8', '1.1.1.1']);
 import 'dotenv/config';
 import express from 'express';
 import http from 'http';
@@ -95,7 +97,7 @@ app.post('/api/webhooks/payment', async (req, res) => {
         $inc: { balance: amount },
         $push: { processedWebhooks: webhookId }
       },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: 'after' }
     ).catch(async (err) => {
       // Duplicate key error on upsert means webhookId was already processed concurrently
       if (err.code === 11000) return null;
